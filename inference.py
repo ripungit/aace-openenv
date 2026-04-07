@@ -2,11 +2,13 @@
 AACE baseline inference - OpenAI-compatible client against the local environment.
 
 Environment variables:
-  AACE_INFERENCE_MODE   ``scripted`` (default) or ``llm``
+  AACE_INFERENCE_MODE   If set: ``scripted`` or ``llm``. If unset: ``llm`` when both
+                        ``API_BASE_URL`` and ``API_KEY`` are set (validator / proxy), else ``scripted``.
   API_BASE_URL          Required non-empty for ``llm`` (OpenAI-compatible chat endpoint)
+  API_KEY               Preferred API key (hackathon validator / LLM proxy injects this)
   MODEL_NAME            Required non-empty for ``llm``
-  HF_TOKEN              Required non-empty for ``llm`` unless ``OPENAI_API_KEY`` is set (used as ``api_key``)
-  OPENAI_API_KEY        Optional fallback for ``HF_TOKEN`` when calling the LLM (hackathon / local convenience)
+  HF_TOKEN              Local fallback key if ``API_KEY`` is unset
+  OPENAI_API_KEY        Local fallback key if ``API_KEY`` and ``HF_TOKEN`` are unset
   AACE_INFERENCE_SEED   Optional int for ``reset()`` (default: 42)
   AACE_OUTPUT_MODE      ``verbose`` (default) or ``compact`` - terminal layout
   AACE_LLM_MAX_RETRIES  Max API attempts per step in ``llm`` mode (default: 3)
@@ -79,14 +81,22 @@ TASK_HEADING = {
 
 
 def _inference_mode() -> str:
-    raw = (os.getenv("AACE_INFERENCE_MODE") or "scripted").strip().lower()
-    if raw not in ("scripted", "llm"):
-        print(
-            f"Error: AACE_INFERENCE_MODE must be 'scripted' or 'llm', got {raw!r}.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    return raw
+    raw = (os.getenv("AACE_INFERENCE_MODE") or "").strip().lower()
+
+    if raw:
+        if raw not in ("scripted", "llm"):
+            print(
+                f"Error: AACE_INFERENCE_MODE must be 'scripted' or 'llm', got {raw!r}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return raw
+
+    # Auto-detect validator / proxy environment.
+    if (os.getenv("API_BASE_URL") or "").strip() and (os.getenv("API_KEY") or "").strip():
+        return "llm"
+
+    return "scripted"
 
 
 def _output_mode() -> str:
@@ -131,30 +141,41 @@ def _llm_timeout_s() -> float:
 
 
 def _llm_credentials() -> tuple[OpenAI, str, str]:
-    """Build client and return (client, api_base, model). Exit if anything missing."""
+    """
+    Build client and return (client, api_base, model).
+
+    Hackathon validator injects:
+      - API_BASE_URL
+      - API_KEY
+
+    Local convenience fallbacks:
+      - HF_TOKEN
+      - OPENAI_API_KEY
+    """
 
     base = (os.getenv("API_BASE_URL") or "").strip()
-    # HF_TOKEN is the primary key per hackathon spec; OPENAI_API_KEY is a safe fallback for local tools.
     key = (
-        (os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY") or "").strip()
+        (os.getenv("API_KEY") or os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY") or "").strip()
     )
     model = (os.getenv("MODEL_NAME") or "").strip()
+
     missing: list[str] = []
     if not base:
         missing.append("API_BASE_URL")
+    if not key:
+        missing.append("API_KEY (or HF_TOKEN / OPENAI_API_KEY for local use)")
     if not model:
         missing.append("MODEL_NAME")
-    if not key:
-        missing.append("HF_TOKEN (or OPENAI_API_KEY as fallback)")
+
     if missing:
         print(
             "Error: llm mode requires non-empty "
             + ", ".join(missing)
-            + ". Set them in the environment or `.env`. "
-            "For the API key, set HF_TOKEN and/or OPENAI_API_KEY.",
+            + ". Set them in the environment or `.env`.",
             file=sys.stderr,
         )
         sys.exit(1)
+
     timeout = _llm_timeout_s()
     return OpenAI(base_url=base, api_key=key, timeout=timeout), base, model
 
