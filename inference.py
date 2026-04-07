@@ -483,6 +483,40 @@ def _llm_diag_display(res: TaskRunResult) -> str:
     )
 
 
+def _emit_structured_start(task_id: str) -> None:
+    print(f"[START] task={task_id}", flush=True)
+
+
+def _emit_structured_step(
+    task_id: str,
+    step: int,
+    reward: float,
+    valid: bool,
+    action: str,
+) -> None:
+    print(
+        f"[STEP] task={task_id} step={step} reward={reward:.4f} "
+        f"valid={str(valid).lower()} action={json.dumps(action)}",
+        flush=True,
+    )
+
+
+def _emit_structured_end(
+    task_id: str,
+    score: float,
+    steps: int,
+    invalid: int,
+    fallbacks: int,
+    reason: str | None,
+) -> None:
+    reason_val = reason or "-"
+    print(
+        f"[END] task={task_id} score={score:.4f} steps={steps} "
+        f"invalid={invalid} fallbacks={fallbacks} reason={reason_val}",
+        flush=True,
+    )
+
+
 def run_task(
     env: AACEEnvironment,
     task_id: str,
@@ -496,10 +530,15 @@ def run_task(
     """
     Run one episode. Counting semantics unchanged from prior versions; ``step_traces``
     is filled only when ``verbose`` is True (for display only).
+
+    Emits ``[START]``, ``[STEP]``, ``[END]`` lines to stdout for machine-readable validation.
     """
 
     obs = env.reset(seed=seed, episode_id=f"infer-{task_id}", task_id=task_id)
     initial_obs = obs
+
+    _emit_structured_start(task_id)
+
     total_steps = 0
     fallback_steps = 0
     invalid_actions = 0
@@ -512,6 +551,7 @@ def run_task(
     for _ in range(MAX_STEPS_PER_TASK):
         if obs.done:
             break
+
         if use_llm:
             assert client is not None
             payload = {
@@ -532,26 +572,46 @@ def run_task(
                 validation_failures += 1
         else:
             action = scripted_action(obs)
+
+        action_str = _format_action(action)
         obs = env.step(action)
         total_steps += 1
+
         if not obs.last_action_valid:
             invalid_actions += 1
+
+        _emit_structured_step(
+            task_id=task_id,
+            step=total_steps,
+            reward=float(obs.reward),
+            valid=bool(obs.last_action_valid),
+            action=action_str,
+        )
+
         if verbose:
             step_traces.append(
-                (total_steps, _format_action(action), float(obs.reward), obs.last_action_valid)
+                (total_steps, action_str, float(obs.reward), obs.last_action_valid)
             )
 
     meta = _obs_metadata(obs)
     terminal_reason = meta.get("terminal_reason")
-    if isinstance(terminal_reason, str):
-        tr: str | None = terminal_reason
-    else:
-        tr = None
+    tr = terminal_reason if isinstance(terminal_reason, str) else None
 
     snap = env.snapshot_for_grader()
     result = GRADERS[task_id](snap)
+    score = float(result.score)
+
+    _emit_structured_end(
+        task_id=task_id,
+        score=score,
+        steps=total_steps,
+        invalid=invalid_actions,
+        fallbacks=fallback_steps,
+        reason=tr,
+    )
+
     return TaskRunResult(
-        float(result.score),
+        score,
         total_steps,
         fallback_steps,
         invalid_actions,
