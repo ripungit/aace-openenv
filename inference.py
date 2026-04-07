@@ -6,7 +6,7 @@ Environment variables:
                         ``API_BASE_URL`` and ``API_KEY`` are set (validator / proxy), else ``scripted``.
   API_BASE_URL          Required non-empty for ``llm`` (OpenAI-compatible chat endpoint)
   API_KEY               Preferred API key (hackathon validator / LLM proxy injects this)
-  MODEL_NAME            Required non-empty for ``llm``
+  MODEL_NAME            Optional; defaults to ``DEFAULT_MODEL_NAME`` when unset
   HF_TOKEN              Local fallback key if ``API_KEY`` is unset
   OPENAI_API_KEY        Local fallback key if ``API_KEY`` and ``HF_TOKEN`` are unset
   AACE_INFERENCE_SEED   Optional int for ``reset()`` (default: 42)
@@ -44,6 +44,7 @@ from env.inference_policy import scripted_action
 from env.models import AACEAction, ActionKind, AACEObservation
 
 DEFAULT_API_BASE = "https://router.huggingface.co/v1"
+DEFAULT_MODEL_NAME = "meta-llama/Llama-3.2-3B-Instruct"
 MAX_STEPS_PER_TASK = 64
 TEMPERATURE = 0.0
 DEFAULT_SEED = 42
@@ -148,6 +149,8 @@ def _llm_credentials() -> tuple[OpenAI, str, str]:
       - API_BASE_URL
       - API_KEY
 
+    MODEL_NAME is optional there; fall back to a safe default.
+
     Local convenience fallbacks:
       - HF_TOKEN
       - OPENAI_API_KEY
@@ -157,15 +160,13 @@ def _llm_credentials() -> tuple[OpenAI, str, str]:
     key = (
         (os.getenv("API_KEY") or os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY") or "").strip()
     )
-    model = (os.getenv("MODEL_NAME") or "").strip()
+    model = (os.getenv("MODEL_NAME") or DEFAULT_MODEL_NAME).strip()
 
     missing: list[str] = []
     if not base:
         missing.append("API_BASE_URL")
     if not key:
         missing.append("API_KEY (or HF_TOKEN / OPENAI_API_KEY for local use)")
-    if not model:
-        missing.append("MODEL_NAME")
 
     if missing:
         print(
